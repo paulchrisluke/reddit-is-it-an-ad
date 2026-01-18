@@ -233,8 +233,17 @@ async function main() {
 	const raw = fs.readFileSync(args.input, 'utf8').split('\n').filter(Boolean);
 	const labeled = [];
 
-	for (const line of raw) {
-		const row = JSON.parse(line);
+	for (let i = 0; i < raw.length; i++) {
+		const line = raw[i];
+		let row;
+		try {
+			row = JSON.parse(line);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const snippet = line.length > 120 ? `${line.slice(0, 117)}...` : line;
+			console.warn(`Skipping line ${i + 1}: ${message} (${snippet})`);
+			continue;
+		}
 		const label = row.label;
 		if (label === args.labelPos) {
 			labeled.push({ features: row.features || {}, label: 1 });

@@ -155,8 +155,8 @@ We segment activity into three distinct chunk types to capture different behavio
 
 - **Incremental Processing**: Uses a watermark system to strictly process new items since the last run.
 - **Embeddings**: Text content is embedded (vectorized) for semantic analysis.
-    - Default: Deterministic generic embedding (stub) for testing/dev.
-    - Production: Uses Cloudflare Workers AI embeddings when `ai` binding is configured in `wrangler.jsonc`.
+  - Default: Deterministic generic embedding (stub) for testing/dev.
+  - Production: Uses Cloudflare Workers AI embeddings when `ai` binding is configured in `wrangler.jsonc`.
 - **Storage**: Raw items and chunks are stored in Cloudflare D1 (SQLite) for complex querying.
 
 ### Running the Pipeline / Tests
