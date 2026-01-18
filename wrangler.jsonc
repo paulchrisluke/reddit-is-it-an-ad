@@ -1,0 +1,54 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "reddit-tracker",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-27",
+	"observability": {
+		"enabled": true
+	},
+	"triggers": {
+		"crons": [
+			"0 */4 * * *" // Every 4 hours for better temporal density
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "REDDIT_USERS",
+			"id": "7e2871f4db134dc3bb2b93602c1c776b"
+		},
+		{
+			"binding": "REDDIT_POSTS",
+			"id": "a2de2324e7b24277973ea29e3a1922ec"
+		},
+		{
+			"binding": "REDDIT_TOP_LISTS",
+			"id": "3618c03061734aa295220f046e842e05"
+		},
+		{
+			"binding": "REDDIT_CONFIG",
+			"id": "c230b4d6883942cd891be790d112fa98"
+		}
+	],
+	// D1 SQLite database for chunking/coordination research
+	// Create with: npx wrangler d1 create reddit-tracker-db
+	// Then update the database_id below
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "reddit-tracker-db",
+			"database_id": "2ac385aa-9eec-4b19-9132-f36fcb6a9f71"
+		}
+	],
+	// Cloudflare Workers AI for embeddings
+	"ai": {
+		"binding": "AI"
+	},
+	// Cloudflare Vectorize for embedding storage
+	// Create with: npx wrangler vectorize create reddit-embeddings --dimensions=768 --metric=cosine
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "reddit-embeddings"
+		}
+	]
+}

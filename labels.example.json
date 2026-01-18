@@ -1,0 +1,12 @@
+{
+  "GallowBoob": {
+    "label": "likely_shill",
+    "confidence": 0.8,
+    "notes": "High-volume image distribution with concentrated domains."
+  },
+  "mvea": {
+    "label": "unclear",
+    "confidence": 0.4,
+    "notes": "Single-subreddit focus; needs comment analysis."
+  }
+}
