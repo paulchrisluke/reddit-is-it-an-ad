@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HASH_SALT = process.env.DATASET_HASH_SALT || '';
 const DEFAULT_BASE_URL = process.env.REDDIT_TRACKER_BASE_URL || 'http://localhost:8787';
 const USERNAME_RE = /[A-Za-z0-9_-]{3,20}/g;
 
@@ -118,7 +119,10 @@ function parseArgs(argv) {
 }
 
 function hashUsername(username) {
-	return crypto.createHash('sha256').update(String(username).toLowerCase()).digest('hex');
+	if (!HASH_SALT) {
+		console.warn('Warning: DATASET_HASH_SALT not set; anonymization may be reversible');
+	}
+	return crypto.createHash('sha256').update(HASH_SALT + String(username).toLowerCase()).digest('hex');
 }
 
 function extractUsernamesFromText(text) {
