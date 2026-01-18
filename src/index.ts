@@ -51,6 +51,20 @@ interface UserData {
 	users: TopUser[];
   }
 
+  interface ProfileSnapshotStats {
+	count: number;
+	first_ts: number | null;
+	last_ts: number | null;
+	delta_link_karma: number | null;
+	delta_comment_karma: number | null;
+  }
+
+  interface UrlReuseStats {
+	distinct_urls: number;
+	shared_urls: number;
+	shared_url_ratio: number;
+  }
+
   interface UserResponse {
 	username: string;
 	post_count: number;
@@ -70,6 +84,8 @@ interface UserData {
 	post_types?: Record<string, number>;
 	urls?: Record<string, number>;
 	profile?: UserProfile;
+	profile_snapshots?: ProfileSnapshotStats;
+	url_reuse?: UrlReuseStats;
   }
 
   interface StatsResponse {
@@ -79,6 +95,12 @@ interface UserData {
 	last_collection: string | null;
 	date: string;
 	system: string;
+  }
+
+  interface CommentCollectionResult {
+	users_processed: number;
+	comments_fetched: number;
+	comments_processed: number;
   }
 
   interface Env {
@@ -115,6 +137,9 @@ interface UserData {
   const MAX_USER_ITEMS = 200; // Safety cap for manual user collection
   const MAX_USER_PAGES = 5;
   const MAX_URLS_PER_USER = 200;
+  const COMMENT_SEED_BATCH = 6;
+  const COMMENT_SEED_LIMIT = 40;
+  const COMMENT_SEED_PAGES = 1;
 
   export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -799,7 +824,7 @@ interface UserData {
   <div class="wrap">
     <header>
       <h1>Is It An Ad?</h1>
-      <p>Review a post and decide if it feels like an ad. Your labels train the model.</p>
+      <p>Review a post and decide if it feels like an ad. Use skip if it is unclear.</p>
     </header>
 
     <div class="toolbar">
@@ -815,6 +840,7 @@ interface UserData {
     <div class="actions">
       <button class="btn btn-primary" id="label-yes">Yes, it is an ad</button>
       <button class="btn" id="label-no">No, it is organic</button>
+      <button class="btn" id="label-skip">Skip (unclear)</button>
     </div>
 
     <div class="footer">
@@ -829,6 +855,7 @@ interface UserData {
     const loadButton = document.getElementById('load-task');
     const yesButton = document.getElementById('label-yes');
     const noButton = document.getElementById('label-no');
+    const skipButton = document.getElementById('label-skip');
 
     let currentTask = null;
     let currentItem = null;
@@ -924,6 +951,7 @@ interface UserData {
     if (loadButton) loadButton.addEventListener('click', loadNext);
     if (yesButton) yesButton.addEventListener('click', () => submitLabel('likely_shill'));
     if (noButton) noButton.addEventListener('click', () => submitLabel('likely_organic'));
+    if (skipButton) skipButton.addEventListener('click', () => submitLabel('unclear'));
 
     loadNext();
   </script>
@@ -962,7 +990,7 @@ interface UserData {
   }
 
   // Main data collection function
-  async function collectData(env: Env): Promise<{ posts_fetched: number; users_updated: number; top_list_count: number; date: string; chunking_result?: any }> {
+  async function collectData(env: Env): Promise<{ posts_fetched: number; users_updated: number; top_list_count: number; date: string; comment_users?: number; comments_fetched?: number; comments_processed?: number; chunking_result?: any }> {
 	const today = new Date().toISOString().split('T')[0];
 
 	console.log('Starting data collection for ' + today);
@@ -982,6 +1010,9 @@ interface UserData {
 	  // Update top 1000 lists
 	  const topCount = await updateTopList(env, today);
 
+	  // Seed comments for top users to enrich behavioral signals
+	  const commentResult = await collectCommentsForTopUsers(env, today);
+
 	  // Track collection count for today
 	  const collectionsToday = parseInt(await env.REDDIT_CONFIG.get('collections_' + today) || '0');
 	  await env.REDDIT_CONFIG.put('collections_' + today, String(collectionsToday + 1), {
@@ -996,7 +1027,16 @@ interface UserData {
 		chunkingResult = await runChunkingPipeline(env);
 	  }
 
-	  return { posts_fetched: posts.length, users_updated: processedCount, top_list_count: topCount, date: today, chunking_result: chunkingResult };
+	  return {
+		posts_fetched: posts.length,
+		users_updated: processedCount,
+		top_list_count: topCount,
+		date: today,
+		comment_users: commentResult.users_processed,
+		comments_fetched: commentResult.comments_fetched,
+		comments_processed: commentResult.comments_processed,
+		chunking_result: chunkingResult
+	  };
 
 	} catch (error) {
 	  console.error('Error in collection:', error);
@@ -1138,6 +1178,53 @@ interface UserData {
 	}
   }
 
+  async function collectCommentsForTopUsers(env: Env, date: string): Promise<CommentCollectionResult> {
+	let topListRaw = await env.REDDIT_TOP_LISTS.get('latest');
+	if (!topListRaw) {
+	  return { users_processed: 0, comments_fetched: 0, comments_processed: 0 };
+	}
+
+	const topList = JSON.parse(topListRaw) as TopUser[];
+	if (!Array.isArray(topList) || topList.length === 0) {
+	  return { users_processed: 0, comments_fetched: 0, comments_processed: 0 };
+	}
+
+	const cursorRaw = await env.REDDIT_CONFIG.get('comment_seed_cursor');
+	let cursor = cursorRaw ? parseInt(cursorRaw, 10) : 0;
+	if (!Number.isFinite(cursor) || cursor < 0) cursor = 0;
+	if (cursor >= topList.length) cursor = 0;
+
+	let batch = topList.slice(cursor, cursor + COMMENT_SEED_BATCH);
+	if (batch.length === 0) {
+	  cursor = 0;
+	  batch = topList.slice(0, COMMENT_SEED_BATCH);
+	}
+
+	let commentsFetched = 0;
+	let commentsProcessed = 0;
+	const now = Math.floor(Date.now() / 1000);
+
+	for (const user of batch) {
+	  const username = user.username;
+	  if (!username) continue;
+	  const comments = await fetchUserListing(username, 'comments', COMMENT_SEED_LIMIT, COMMENT_SEED_PAGES);
+	  commentsFetched += comments.length;
+	  commentsProcessed += await processItems(comments, date, env, 'comment');
+
+	  const about = await fetchUserAbout(username);
+	  const profile = normalizeUserProfile(about);
+	  if (profile) {
+		await upsertUserProfile(env, username, profile, date);
+		await insertProfileSnapshot(env, username, profile, now);
+	  }
+	}
+
+	const nextCursor = (cursor + COMMENT_SEED_BATCH) % topList.length;
+	await env.REDDIT_CONFIG.put('comment_seed_cursor', String(nextCursor), { expirationTtl: 7 * 86400 });
+
+	return { users_processed: batch.length, comments_fetched: commentsFetched, comments_processed: commentsProcessed };
+  }
+
   function normalizeUserProfile(about: any): UserProfile | null {
 	if (!about || typeof about !== 'object') return null;
 	return {
@@ -1186,6 +1273,30 @@ interface UserData {
 	}
 
 	await env.REDDIT_USERS.put(userKey, JSON.stringify(userData));
+  }
+
+  function boolToInt(value: boolean | undefined): number | null {
+	if (typeof value !== 'boolean') return null;
+	return value ? 1 : 0;
+  }
+
+  async function insertProfileSnapshot(env: Env, username: string, profile: UserProfile | null, snapshotTs: number): Promise<void> {
+	if (!env.DB || !profile) return;
+	const accountId = username.toLowerCase();
+	await env.DB.prepare(`
+	  INSERT INTO account_profile_snapshots (
+		account_id, snapshot_ts, created_utc, link_karma, comment_karma, is_mod, is_gold, has_verified_email
+	  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`).bind(
+	  accountId,
+	  snapshotTs,
+	  profile.created_utc ?? null,
+	  profile.link_karma ?? null,
+	  profile.comment_karma ?? null,
+	  boolToInt(profile.is_mod),
+	  boolToInt(profile.is_gold),
+	  boolToInt(profile.has_verified_email)
+	).run();
   }
 
   function formatUtcDate(createdUtc: number | undefined): string | null {
@@ -1288,8 +1399,17 @@ interface UserData {
 	}
 
 	const userUpdates = new Map<string, string>();
+	const urlRows: Array<{
+	  account_id: string;
+	  post_id: string;
+	  url: string;
+	  domain: string | null;
+	  created_utc: number | null;
+	  ingested_at: number;
+	}> = [];
 	const itemMarkers: [string, string][] = [];
 	let count = 0;
+	const ingestedAt = Math.floor(Date.now() / 1000);
 
 	for (const item of items) {
 	  const author = item.author;
@@ -1369,6 +1489,16 @@ interface UserData {
 			const urlTotal = Object.keys(userData.urls).length;
 			if (urlCount !== undefined || urlTotal < MAX_URLS_PER_USER) {
 			  userData.urls[normalized] = (urlCount || 0) + 1;
+			  if (env.DB) {
+				urlRows.push({
+				  account_id: author.toLowerCase(),
+				  post_id: itemId,
+				  url: normalized,
+				  domain: domain || null,
+				  created_utc: Number.isFinite(item.created_utc) ? item.created_utc : null,
+				  ingested_at: ingestedAt
+				});
+			  }
 			}
 		  }
 		}
@@ -1423,7 +1553,7 @@ interface UserData {
 			  body: item.selftext || '',
 			  score: item.score,
 			  permalink: item.permalink,
-			  ingested_at: Math.floor(Date.now() / 1000),
+			  ingested_at: ingestedAt,
 			  raw_json: JSON.stringify(item)
 			});
 		  } else {
@@ -1439,7 +1569,7 @@ interface UserData {
 			  body: item.body || '',
 			  score: item.score,
 			  permalink: item.permalink,
-			  ingested_at: Math.floor(Date.now() / 1000),
+			  ingested_at: ingestedAt,
 			  raw_json: JSON.stringify(item)
 			});
 		  }
@@ -1450,6 +1580,23 @@ interface UserData {
 		  await d1Db.insertItems(rawItems.slice(i, i + BATCH_SIZE));
 		}
 		console.log(`📥 Stored ${rawItems.length} items in D1 for chunking`);
+
+		if (urlRows.length > 0) {
+		  const urlStmt = env.DB.prepare(`
+			INSERT OR IGNORE INTO account_urls (account_id, post_id, url, domain, created_utc, ingested_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		  `);
+		  const urlBatch = urlRows.map((row) => urlStmt.bind(
+			row.account_id,
+			row.post_id,
+			row.url,
+			row.domain,
+			row.created_utc,
+			row.ingested_at
+		  ));
+		  await env.DB.batch(urlBatch);
+		  console.log(`🔗 Stored ${urlRows.length} account URLs`);
+		}
 	  } catch (d1Error) {
 		console.error('Error storing items in D1:', d1Error);
 	  }
@@ -1557,6 +1704,8 @@ interface UserData {
 	includeUrls: boolean;
 	includeComments: boolean;
 	includeProfile: boolean;
+	includeProfileSnapshots: boolean;
+	includeUrlReuse: boolean;
 	includeItem: boolean;
   };
 
@@ -1571,6 +1720,8 @@ interface UserData {
 	const includeUrls = include.has('urls') || includeBreakdown;
 	const includeComments = include.has('comments') || includeBreakdown;
 	const includeProfile = include.has('profile') || include.has('all');
+	const includeProfileSnapshots = include.has('profile_snapshots') || include.has('all');
+	const includeUrlReuse = include.has('url_reuse') || include.has('all');
 	const includeItem = include.has('item') || include.has('all');
 
 	return {
@@ -1583,6 +1734,8 @@ interface UserData {
 	  includeUrls,
 	  includeComments,
 	  includeProfile,
+	  includeProfileSnapshots,
+	  includeUrlReuse,
 	  includeItem
 	};
   }
@@ -1631,6 +1784,103 @@ interface UserData {
 	}
 
 	return response;
+  }
+
+  function coerceNumber(value: unknown): number | null {
+	if (typeof value === 'number' && Number.isFinite(value)) return value;
+	if (typeof value === 'string' && value.trim() !== '') {
+	  const parsed = Number(value);
+	  return Number.isFinite(parsed) ? parsed : null;
+	}
+	return null;
+  }
+
+  async function fetchProfileSnapshotStats(env: Env, accountId: string): Promise<ProfileSnapshotStats | undefined> {
+	if (!env.DB) return undefined;
+
+	const summary = await env.DB.prepare(`
+	  SELECT COUNT(*) AS count,
+			 MIN(snapshot_ts) AS first_ts,
+			 MAX(snapshot_ts) AS last_ts
+	  FROM account_profile_snapshots
+	  WHERE account_id = ?
+	`).bind(accountId).first() as Record<string, any> | null;
+
+	const count = coerceNumber(summary?.count) ?? 0;
+	const firstTs = coerceNumber(summary?.first_ts);
+	const lastTs = coerceNumber(summary?.last_ts);
+
+	if (count === 0) {
+	  return {
+		count: 0,
+		first_ts: null,
+		last_ts: null,
+		delta_link_karma: null,
+		delta_comment_karma: null
+	  };
+	}
+
+	const firstRow = await env.DB.prepare(`
+	  SELECT link_karma, comment_karma
+	  FROM account_profile_snapshots
+	  WHERE account_id = ?
+	  ORDER BY snapshot_ts ASC
+	  LIMIT 1
+	`).bind(accountId).first() as Record<string, any> | null;
+
+	const lastRow = await env.DB.prepare(`
+	  SELECT link_karma, comment_karma
+	  FROM account_profile_snapshots
+	  WHERE account_id = ?
+	  ORDER BY snapshot_ts DESC
+	  LIMIT 1
+	`).bind(accountId).first() as Record<string, any> | null;
+
+	const firstLink = coerceNumber(firstRow?.link_karma);
+	const lastLink = coerceNumber(lastRow?.link_karma);
+	const firstComment = coerceNumber(firstRow?.comment_karma);
+	const lastComment = coerceNumber(lastRow?.comment_karma);
+
+	const deltaLink = (firstLink !== null && lastLink !== null) ? lastLink - firstLink : null;
+	const deltaComment = (firstComment !== null && lastComment !== null) ? lastComment - firstComment : null;
+
+	return {
+	  count,
+	  first_ts: firstTs,
+	  last_ts: lastTs,
+	  delta_link_karma: deltaLink,
+	  delta_comment_karma: deltaComment
+	};
+  }
+
+  async function fetchUrlReuseStats(env: Env, accountId: string): Promise<UrlReuseStats | undefined> {
+	if (!env.DB) return undefined;
+
+	const distinctRow = await env.DB.prepare(`
+	  SELECT COUNT(DISTINCT url) AS distinct_urls
+	  FROM account_urls
+	  WHERE account_id = ?
+	`).bind(accountId).first() as Record<string, any> | null;
+
+	const distinct = coerceNumber(distinctRow?.distinct_urls) ?? 0;
+
+	const sharedRow = await env.DB.prepare(`
+	  SELECT COUNT(*) AS shared_urls FROM (
+		SELECT url
+		FROM account_urls
+		WHERE url IN (SELECT url FROM account_urls WHERE account_id = ?)
+		GROUP BY url
+		HAVING COUNT(DISTINCT account_id) > 1
+	  ) t
+	`).bind(accountId).first() as Record<string, any> | null;
+
+	const shared = coerceNumber(sharedRow?.shared_urls) ?? 0;
+
+	return {
+	  distinct_urls: distinct,
+	  shared_urls: shared,
+	  shared_url_ratio: distinct > 0 ? shared / distinct : 0
+	};
   }
 
   async function getUserData(env: Env, username: string): Promise<UserData | null> {
@@ -1749,7 +1999,18 @@ interface UserData {
 	}
 
 	const flags = parseIncludeFlags(url.searchParams.get('include'));
-	return jsonResponse(buildUserResponse(userData, flags));
+	const response = buildUserResponse(userData, flags);
+	const accountId = username.toLowerCase();
+
+	if (flags.includeProfileSnapshots) {
+	  response.profile_snapshots = await fetchProfileSnapshotStats(env, accountId);
+	}
+
+	if (flags.includeUrlReuse) {
+	  response.url_reuse = await fetchUrlReuseStats(env, accountId);
+	}
+
+	return jsonResponse(response);
   }
 
   async function handleCollectUser(request: Request, env: Env): Promise<Response> {
@@ -1782,6 +2043,7 @@ interface UserData {
 	  const profile = normalizeUserProfile(about);
 	  if (profile) {
 		await upsertUserProfile(env, username, profile, today);
+		await insertProfileSnapshot(env, username, profile, Math.floor(Date.now() / 1000));
 		profileUpdated = true;
 	  }
 	}
@@ -2272,6 +2534,8 @@ Human judgment is encoded as labels to train and evaluate models. Labels use thr
 - **unclear**
 
 Labels include confidence and notes to capture reasoning. This builds a growing ground-truth dataset aligned with the author's intuition.
+
+For consistent labeling, use the rubric in docs/labeling-rubric.md. The game maps "Yes" to likely_shill and "No" to likely_organic, while unclear is reserved for ambiguous cases or manual review.
 
 ## 4. Results (Preliminary)
 

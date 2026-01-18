@@ -129,6 +129,8 @@ Human judgment is encoded as labels to train and evaluate models. Labels use thr
 
 Labels include confidence and notes to capture reasoning. This builds a growing ground-truth dataset aligned with the author's intuition.
 
+For consistent labeling, use the rubric in `docs/labeling-rubric.md`. The game maps "Yes" to `likely_shill` and "No" to `likely_organic`, while `unclear` is reserved for ambiguous cases or manual review.
+
 ## 4. Results (Preliminary)
 
 ### 4.1 Data Overview
