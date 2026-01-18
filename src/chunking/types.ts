@@ -26,8 +26,6 @@ export interface ChunkConfig {
   // Embedding throttles
   maxEmbeddingsPerRun?: number; // Default: 20 (set 0 to disable)
 
-  // Skip per-chunk lookups to reduce DB/subrequest load
-  skipChunkLookups?: boolean;
 }
 
 export const DEFAULT_CHUNK_CONFIG: ChunkConfig = {
@@ -35,8 +33,7 @@ export const DEFAULT_CHUNK_CONFIG: ChunkConfig = {
   sessionGapMs: 2 * 60 * 60 * 1000,          // 2 hours
   copresenceWindowMs: 30 * 60 * 1000,        // 30 minutes
   copresenceSlideMs: 15 * 60 * 1000,         // 15 minutes
-  maxEmbeddingsPerRun: 20,
-  skipChunkLookups: false
+  maxEmbeddingsPerRun: 20
 };
 
 // ============================================================================

@@ -27,7 +27,6 @@ export {
 // Embedding providers
 export {
   StubEmbeddingProvider,
-  OpenAIEmbeddingProvider,
   CloudflareAiEmbeddingProvider,
   createEmbeddingProvider,
 } from './embedding-providers';

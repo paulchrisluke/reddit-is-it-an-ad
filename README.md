@@ -93,9 +93,9 @@ npx wrangler deploy
 Edit `wrangler.jsonc` to customize:
 
 - `name` - Your worker name
-- `triggers.crons` - Data collection schedule and nightly embeddings run
+- `triggers.crons` - Data collection schedule
 
-Embeddings can also be triggered manually via `GET /api/trigger-chunking?embeddings=true`.
+Embeddings run as part of chunking; manual runs require an admin token via `GET /api/trigger-chunking` with an `Authorization: Bearer <token>` header.
 
 ## 📈 Data Collection
 
@@ -156,7 +156,7 @@ We segment activity into three distinct chunk types to capture different behavio
 - **Incremental Processing**: Uses a watermark system to strictly process new items since the last run.
 - **Embeddings**: Text content is embedded (vectorized) for semantic analysis.
     - Default: Deterministic generic embedding (stub) for testing/dev.
-    - Production: Supports OpenAI `text-embedding-3-small` (configure `OPENAI_API_KEY`).
+    - Production: Uses Cloudflare Workers AI embeddings when enabled.
 - **Storage**: Raw items and chunks are stored in Cloudflare D1 (SQLite) for complex querying.
 
 ### Running the Pipeline / Tests

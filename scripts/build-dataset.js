@@ -120,7 +120,7 @@ function parseArgs(argv) {
 
 function hashUsername(username) {
 	if (!HASH_SALT) {
-		console.warn('Warning: DATASET_HASH_SALT not set; anonymization may be reversible');
+		throw new Error('DATASET_HASH_SALT must be set when --anonymize is enabled.');
 	}
 	return crypto.createHash('sha256').update(HASH_SALT + String(username).toLowerCase()).digest('hex');
 }
@@ -413,6 +413,11 @@ async function main() {
 
 	const baseUrl = String(args.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
 	const labelsMap = loadLabels(args.labels);
+	if (args.anonymize && !HASH_SALT) {
+		console.error('Error: --anonymize requires DATASET_HASH_SALT to be set.');
+		process.exitCode = 1;
+		return;
+	}
 
 	if (args.seed) {
 		const seedLimit = Number.isFinite(args.seedLimit) && args.seedLimit > 0 ? args.seedLimit : 100;

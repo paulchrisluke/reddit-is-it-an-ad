@@ -21,7 +21,8 @@ function printUsage() {
 		'  --dataset <path>     Dataset JSONL to validate labels',
 		'  --train              Run baseline training if labels allow',
 		'  --model-out <path>   Output path for baseline model (default: models/baseline-model.json)',
-		'  --no-write-label     Do not submit an "unclear" label for the fetched task',
+		'  --write-label        Submit an "unclear" label for the fetched task',
+		'  --no-write-label     Skip label submission (default)',
 		'  -h, --help           Show help',
 	].join('\n'));
 }
@@ -35,7 +36,7 @@ function parseArgs(argv) {
 		dataset: null,
 		train: false,
 		modelOut: 'models/baseline-model.json',
-		writeLabel: true,
+		writeLabel: false,
 		help: false
 	};
 
@@ -67,6 +68,10 @@ function parseArgs(argv) {
 		}
 		if (arg === '--model-out') {
 			args.modelOut = argv[++i];
+			continue;
+		}
+		if (arg === '--write-label') {
+			args.writeLabel = true;
 			continue;
 		}
 		if (arg === '--no-write-label') {

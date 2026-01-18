@@ -260,11 +260,31 @@ async function main() {
 	}
 
 	const rng = mulberry32(Number.isFinite(args.seed) ? args.seed : 42);
-	const indices = shuffle(labeled.map((_, idx) => idx), rng);
 	const testSplit = Number.isFinite(args.testSplit) ? Math.min(Math.max(args.testSplit, 0.05), 0.5) : 0.2;
-	const testCount = Math.max(1, Math.floor(indices.length * testSplit));
-	const testSet = indices.slice(0, testCount).map((idx) => labeled[idx]);
-	const trainSet = indices.slice(testCount).map((idx) => labeled[idx]);
+	const byLabel = new Map();
+	for (let i = 0; i < labeled.length; i++) {
+		const label = labeled[i].label;
+		if (!byLabel.has(label)) byLabel.set(label, []);
+		byLabel.get(label).push(i);
+	}
+
+	const testIndices = [];
+	const trainIndices = [];
+	for (const indices of byLabel.values()) {
+		shuffle(indices, rng);
+		const classCount = indices.length;
+		let classTestCount = Math.floor(classCount * testSplit);
+		if (classCount > 1 && classTestCount === 0) classTestCount = 1;
+		if (classCount > 1 && classTestCount >= classCount) classTestCount = classCount - 1;
+		testIndices.push(...indices.slice(0, classTestCount));
+		trainIndices.push(...indices.slice(classTestCount));
+	}
+
+	shuffle(testIndices, rng);
+	shuffle(trainIndices, rng);
+
+	const testSet = testIndices.map((idx) => labeled[idx]);
+	const trainSet = trainIndices.map((idx) => labeled[idx]);
 
 	if (trainSet.length === 0) {
 		console.error('Dataset too small for train/test split. Need at least 2 samples.');

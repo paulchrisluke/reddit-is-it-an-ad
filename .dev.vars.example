@@ -1,0 +1,5 @@
+# Example local dev vars for Wrangler.
+# Copy to .dev.vars and fill with real values.
+
+ADMIN_TOKEN=replace-with-random-token
+DATASET_HASH_SALT=replace-with-random-salt

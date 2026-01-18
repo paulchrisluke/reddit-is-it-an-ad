@@ -109,14 +109,13 @@ interface UserData {
 	REDDIT_POSTS: KVNamespace;
 	REDDIT_TOP_LISTS: KVNamespace;
 	REDDIT_CONFIG: KVNamespace;
+	ADMIN_TOKEN?: string;
 	// D1 Database for chunking/coordination research
 	DB: D1Database;
 	// Cloudflare Workers AI
 	AI: any; 
 	// Cloudflare Vectorize
 	VECTORIZE: VectorizeIndex;
-	// Optional secrets
-	OPENAI_API_KEY?: string;
   }
 
   // Import chunking modules
@@ -140,7 +139,6 @@ interface UserData {
   const COMMENT_SEED_BATCH = 6;
   const COMMENT_SEED_LIMIT = 40;
   const COMMENT_SEED_PAGES = 1;
-  const EMBEDDINGS_CRON = '0 3 * * *';
 
   export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -195,8 +193,15 @@ interface UserData {
 	  if (path === '/api/trigger-chunking') {
 		try {
 			const url = new URL(request.url);
-			const allowEmbeddings = url.searchParams.get('embeddings') === 'true';
-			const result = await runChunkingPipeline(env, { allowEmbeddings });
+			const tokenParam = url.searchParams.get('token') || '';
+			const headerAuth = request.headers.get('Authorization') || '';
+			const headerToken = request.headers.get('X-Admin-Token') || '';
+			const bearer = headerAuth.startsWith('Bearer ') ? headerAuth.slice(7).trim() : '';
+			const token = tokenParam || bearer || headerToken;
+			if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+				return jsonResponse({ error: 'Unauthorized for chunking' }, 403);
+			}
+			const result = await runChunkingPipeline(env);
 			return jsonResponse({ status: 'completed', result });
 		} catch (error) {
 			return jsonResponse({ status: 'error', message: error instanceof Error ? error.message : String(error) }, 500);
@@ -684,12 +689,6 @@ interface UserData {
 
 	// The scheduled handler runs automatically via cron trigger
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-	  if (event.cron === EMBEDDINGS_CRON) {
-		ctx.waitUntil(runChunkingPipeline(env, { allowEmbeddings: true }));
-		console.log('Cron triggered at ' + event.cron + ': Running embeddings chunking');
-		return;
-	  }
-
 	  ctx.waitUntil(collectData(env));
 	  console.log('Cron triggered at ' + event.cron + ': Starting data collection');
 	},
@@ -963,7 +962,7 @@ interface UserData {
   }
 
   // Run the incremental chunking pipeline
-  async function runChunkingPipeline(env: Env, options: { allowEmbeddings?: boolean } = {}) {
+  async function runChunkingPipeline(env: Env) {
 	if (!env.DB) {
 		console.log('Skipping chunking: DB not configured');
 		return;
@@ -971,20 +970,15 @@ interface UserData {
 	
 	console.log('Starting Chunking Pipeline...');
 	try {
-		const allowEmbeddings = options.allowEmbeddings === true;
-		const db = new D1ChunkingDatabase(env.DB, allowEmbeddings ? env.VECTORIZE : undefined);
+		const db = new D1ChunkingDatabase(env.DB, env.VECTORIZE);
 		
 		// Configure embedding provider - Prefer Cloudflare AI
 		const embeddingProvider = createEmbeddingProvider({
-			provider: allowEmbeddings ? (env.AI ? 'cloudflare' : (env.OPENAI_API_KEY ? 'openai' : 'stub')) : 'stub',
-			aiBinding: env.AI,
-			openaiApiKey: env.OPENAI_API_KEY
+			provider: env.AI ? 'cloudflare' : 'stub',
+			aiBinding: env.AI
 		});
 		
-		const config = allowEmbeddings
-			? DEFAULT_CHUNK_CONFIG
-			: { ...DEFAULT_CHUNK_CONFIG, maxEmbeddingsPerRun: 0, skipChunkLookups: true };
-		const pipeline = new ChunkingPipeline(db, embeddingProvider, config);
+		const pipeline = new ChunkingPipeline(db, embeddingProvider, DEFAULT_CHUNK_CONFIG);
 		const result = await pipeline.run();
 		
 		console.log('Chunking Pipeline Complete:', result);

@@ -74,78 +74,6 @@ export class StubEmbeddingProvider implements EmbeddingProvider {
 }
 
 // ============================================================================
-// OPENAI EMBEDDING PROVIDER
-// ============================================================================
-
-interface OpenAIEmbeddingResponse {
-  data: Array<{
-    embedding: number[];
-    index: number;
-  }>;
-  model: string;
-  usage: {
-    prompt_tokens: number;
-    total_tokens: number;
-  };
-}
-
-/**
- * OpenAI text-embedding-3-small provider
- * Requires OPENAI_API_KEY environment variable
- */
-export class OpenAIEmbeddingProvider implements EmbeddingProvider {
-  readonly name = 'openai';
-  readonly model = 'text-embedding-3-small';
-  readonly version = '2024-01';
-  readonly dimensions = 1536;
-  
-  private apiKey: string;
-  private baseUrl: string;
-
-  constructor(apiKey: string, baseUrl = 'https://api.openai.com/v1') {
-    this.apiKey = apiKey;
-    this.baseUrl = baseUrl;
-  }
-
-  async embed(text: string): Promise<EmbeddingResult> {
-    const results = await this.embedBatch([text]);
-    return results[0];
-  }
-
-  async embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
-    const response = await fetch(`${this.baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        input: texts,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as OpenAIEmbeddingResponse;
-    
-    // Sort by index to maintain order
-    const sorted = [...data.data].sort((a, b) => a.index - b.index);
-    
-    return sorted.map(item => ({
-      vector: item.embedding,
-      model: this.model,
-      version: this.version,
-      provider: this.name,
-      dimensions: item.embedding.length,
-    }));
-  }
-}
-
-// ============================================================================
 // CLOUDFLARE WORKERS AI EMBEDDING PROVIDER
 // ============================================================================
 
@@ -198,9 +126,7 @@ export class CloudflareAiEmbeddingProvider implements EmbeddingProvider {
 // ============================================================================
 
 export interface EmbeddingProviderConfig {
-  provider: 'stub' | 'openai' | 'cloudflare';
-  openaiApiKey?: string;
-  openaiBaseUrl?: string;
+  provider: 'stub' | 'cloudflare';
   aiBinding?: any;
 }
 
@@ -214,12 +140,7 @@ export function createEmbeddingProvider(config: EmbeddingProviderConfig): Embedd
     return new CloudflareAiEmbeddingProvider(config.aiBinding);
   }
 
-  // 2. OpenAI
-  if (config.provider === 'openai' && config.openaiApiKey) {
-    return new OpenAIEmbeddingProvider(config.openaiApiKey, config.openaiBaseUrl);
-  }
-  
-  // 3. Fallback Stub
-  console.log('Using stub embedding provider (no AI binding or API key configured)');
+  // 2. Fallback Stub
+  console.log('Using stub embedding provider (no AI binding configured)');
   return new StubEmbeddingProvider();
 }
