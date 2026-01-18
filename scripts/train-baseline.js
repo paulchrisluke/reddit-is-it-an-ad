@@ -266,6 +266,12 @@ async function main() {
 	const testSet = indices.slice(0, testCount).map((idx) => labeled[idx]);
 	const trainSet = indices.slice(testCount).map((idx) => labeled[idx]);
 
+	if (trainSet.length === 0) {
+		console.error('Dataset too small for train/test split. Need at least 2 samples.');
+		process.exitCode = 1;
+		return;
+	}
+
 	const { means, stds } = computeNormalization(trainSet, featureKeys);
 	const weights = new Array(featureKeys.length).fill(0);
 	let bias = 0;

@@ -93,7 +93,9 @@ npx wrangler deploy
 Edit `wrangler.jsonc` to customize:
 
 - `name` - Your worker name
-- `triggers.crons` - Data collection schedule (default: daily at 2 AM UTC)
+- `triggers.crons` - Data collection schedule and nightly embeddings run
+
+Embeddings can also be triggered manually via `GET /api/trigger-chunking?embeddings=true`.
 
 ## 📈 Data Collection
 
@@ -130,11 +132,11 @@ We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guideline
 # Run locally
 npx wrangler dev
 
-# Run tests
-npm test
-
 # Type check
 npx tsc --noEmit
+
+# Pipeline health check (crawler + game + review flow)
+npm run check:pipeline -- --base-url https://your-worker.workers.dev --dataset datasets/shill-dataset.jsonl --no-write-label
 ```
 
 ## 🧠 Data Science & Chunking

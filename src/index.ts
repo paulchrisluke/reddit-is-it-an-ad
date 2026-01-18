@@ -140,6 +140,7 @@ interface UserData {
   const COMMENT_SEED_BATCH = 6;
   const COMMENT_SEED_LIMIT = 40;
   const COMMENT_SEED_PAGES = 1;
+  const EMBEDDINGS_CRON = '0 3 * * *';
 
   export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -193,7 +194,9 @@ interface UserData {
 
 	  if (path === '/api/trigger-chunking') {
 		try {
-			const result = await runChunkingPipeline(env);
+			const url = new URL(request.url);
+			const allowEmbeddings = url.searchParams.get('embeddings') === 'true';
+			const result = await runChunkingPipeline(env, { allowEmbeddings });
 			return jsonResponse({ status: 'completed', result });
 		} catch (error) {
 			return jsonResponse({ status: 'error', message: error instanceof Error ? error.message : String(error) }, 500);
@@ -681,15 +684,14 @@ interface UserData {
 
 	// The scheduled handler runs automatically via cron trigger
 	async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-	  // Chain collection AND chunking
-	  ctx.waitUntil(
-		collectData(env).then(() => {
-			if (env.DB) {
-				return runChunkingPipeline(env);
-			}
-		})
-	  );
-	  console.log('Cron triggered at ' + event.cron + ': Starting data collection and chunking');
+	  if (event.cron === EMBEDDINGS_CRON) {
+		ctx.waitUntil(runChunkingPipeline(env, { allowEmbeddings: true }));
+		console.log('Cron triggered at ' + event.cron + ': Running embeddings chunking');
+		return;
+	  }
+
+	  ctx.waitUntil(collectData(env));
+	  console.log('Cron triggered at ' + event.cron + ': Starting data collection');
 	},
   };
 
@@ -961,7 +963,7 @@ interface UserData {
   }
 
   // Run the incremental chunking pipeline
-  async function runChunkingPipeline(env: Env) {
+  async function runChunkingPipeline(env: Env, options: { allowEmbeddings?: boolean } = {}) {
 	if (!env.DB) {
 		console.log('Skipping chunking: DB not configured');
 		return;
@@ -969,16 +971,20 @@ interface UserData {
 	
 	console.log('Starting Chunking Pipeline...');
 	try {
-		const db = new D1ChunkingDatabase(env.DB, env.VECTORIZE);
+		const allowEmbeddings = options.allowEmbeddings === true;
+		const db = new D1ChunkingDatabase(env.DB, allowEmbeddings ? env.VECTORIZE : undefined);
 		
 		// Configure embedding provider - Prefer Cloudflare AI
 		const embeddingProvider = createEmbeddingProvider({
-			provider: env.AI ? 'cloudflare' : (env.OPENAI_API_KEY ? 'openai' : 'stub'),
+			provider: allowEmbeddings ? (env.AI ? 'cloudflare' : (env.OPENAI_API_KEY ? 'openai' : 'stub')) : 'stub',
 			aiBinding: env.AI,
 			openaiApiKey: env.OPENAI_API_KEY
 		});
 		
-		const pipeline = new ChunkingPipeline(db, embeddingProvider, DEFAULT_CHUNK_CONFIG);
+		const config = allowEmbeddings
+			? DEFAULT_CHUNK_CONFIG
+			: { ...DEFAULT_CHUNK_CONFIG, maxEmbeddingsPerRun: 0, skipChunkLookups: true };
+		const pipeline = new ChunkingPipeline(db, embeddingProvider, config);
 		const result = await pipeline.run();
 		
 		console.log('Chunking Pipeline Complete:', result);
@@ -1016,6 +1022,9 @@ interface UserData {
 	  // Track collection count for today
 	  const collectionsToday = parseInt(await env.REDDIT_CONFIG.get('collections_' + today) || '0');
 	  await env.REDDIT_CONFIG.put('collections_' + today, String(collectionsToday + 1), {
+		expirationTtl: 2 * 86400
+	  });
+	  await env.REDDIT_CONFIG.put('last_' + today, new Date().toISOString(), {
 		expirationTtl: 2 * 86400
 	  });
 
@@ -1613,6 +1622,57 @@ interface UserData {
   // Update top 1000 list
   async function updateTopList(env: Env, date: string): Promise<number> {
 	try {
+	  if (env.DB) {
+		const cutoff = Math.floor(Date.now() / 1000) - KV_TTL;
+		const rows = await env.DB.prepare(`
+		  SELECT account_id,
+				 COUNT(*) AS post_count,
+				 MIN(created_utc) AS first_seen,
+				 MAX(created_utc) AS last_seen,
+				 SUM(score) AS total_score
+		  FROM items
+		  WHERE item_type = 'post'
+			AND created_utc >= ?
+		  GROUP BY account_id
+		  ORDER BY post_count DESC
+		  LIMIT 1000
+		`).bind(cutoff).all();
+
+		const results = (rows.results || []) as Array<Record<string, any>>;
+		if (results.length > 0) {
+		  const top1000: TopUser[] = results.map((row, index) => {
+			const postCount = coerceNumber(row.post_count) ?? 0;
+			const firstSeenUtc = coerceNumber(row.first_seen);
+			const lastSeenUtc = coerceNumber(row.last_seen);
+			const daysActive = (firstSeenUtc !== null && lastSeenUtc !== null && lastSeenUtc >= firstSeenUtc)
+			  ? Math.ceil((lastSeenUtc - firstSeenUtc) / 86400) + 1
+			  : 1;
+			const dailyAverage = daysActive > 0 ? postCount / daysActive : postCount;
+
+			return {
+			  rank: index + 1,
+			  username: String(row.account_id),
+			  post_count: postCount,
+			  total_karma: coerceNumber(row.total_score) ?? 0,
+			  first_seen: formatUtcDate(firstSeenUtc || undefined) || date,
+			  daily_average: dailyAverage,
+			  top_subreddit: 'N/A'
+			};
+		  });
+
+		  await env.REDDIT_TOP_LISTS.put(`top_${date}`, JSON.stringify(top1000), {
+			expirationTtl: KV_TTL
+		  });
+
+		  await env.REDDIT_TOP_LISTS.put('latest', JSON.stringify(top1000), {
+			expirationTtl: 86400
+		  });
+
+		  console.log(`📊 Updated top list with ${top1000.length} users (D1)`);
+		  return top1000.length;
+		}
+	  }
+
 	  // Get all users
 	  const users: UserData[] = [];
 	  let cursor: string | undefined;

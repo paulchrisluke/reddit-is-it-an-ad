@@ -295,6 +295,9 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 	}
 
 	const labels = labelsMap.get(username.toLowerCase());
+	const labelValue = labels?.label ?? null;
+	const labelConfidence = labels?.confidence ?? null;
+	const labelNotes = labels?.notes ?? null;
 
 	const flags = {
 		low_comment_ratio: commentRatio < 0.2,
@@ -309,9 +312,9 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 
 	const row = {
 		username,
-		label: labels?.label,
-		label_confidence: labels?.confidence,
-		label_notes: labels?.notes,
+		label: labelValue,
+		label_confidence: labelConfidence,
+		label_notes: labelNotes,
 		features: {
 			post_count: data.post_count || 0,
 			comment_count: data.comment_count || 0,

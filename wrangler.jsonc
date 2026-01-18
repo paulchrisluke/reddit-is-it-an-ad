@@ -8,7 +8,8 @@
 	},
 	"triggers": {
 		"crons": [
-			"0 */4 * * *" // Every 4 hours for better temporal density
+			"0 */4 * * *", // Every 4 hours for better temporal density
+			"0 3 * * *" // Nightly embeddings run
 		]
 	},
 	"kv_namespaces": [
