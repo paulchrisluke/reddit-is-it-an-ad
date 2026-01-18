@@ -95,7 +95,7 @@ Edit `wrangler.jsonc` to customize:
 - `name` - Your worker name
 - `triggers.crons` - Data collection schedule
 
-Embeddings run as part of chunking; manual runs require an admin token via `GET /api/trigger-chunking` with an `Authorization: Bearer <token>` header.
+Embeddings run as part of chunking. Manual runs require an admin token set as `ADMIN_TOKEN` (local: `.dev.vars`, deployed: `wrangler secret put ADMIN_TOKEN`) and passed via `Authorization: Bearer <token>` to `GET /api/trigger-chunking`.
 
 ## 📈 Data Collection
 
@@ -156,7 +156,7 @@ We segment activity into three distinct chunk types to capture different behavio
 - **Incremental Processing**: Uses a watermark system to strictly process new items since the last run.
 - **Embeddings**: Text content is embedded (vectorized) for semantic analysis.
     - Default: Deterministic generic embedding (stub) for testing/dev.
-    - Production: Uses Cloudflare Workers AI embeddings when enabled.
+    - Production: Uses Cloudflare Workers AI embeddings when `ai` binding is configured in `wrangler.jsonc`.
 - **Storage**: Raw items and chunks are stored in Cloudflare D1 (SQLite) for complex querying.
 
 ### Running the Pipeline / Tests
@@ -176,7 +176,7 @@ We segment activity into three distinct chunk types to capture different behavio
     Deploy the worker, then visit: `https://your-worker.workers.dev/api/test-chunking-logic`
 
 4.  **Trigger Pipeline Manually**:
-    `https://your-worker.workers.dev/api/trigger-chunking`
+    `curl -H "Authorization: Bearer <token>" https://your-worker.workers.dev/api/trigger-chunking`
 
 ## 📜 Ethics & Privacy
 
