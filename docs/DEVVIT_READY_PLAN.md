@@ -28,8 +28,12 @@ Rank accounts by likely‑shill signals with a minimum vote threshold. Avoid net
 
 ### API Endpoint (Worker)
 - `GET /api/leaderboard?limit=1000&cursor=...`
-  - returns `account_hash`, `shill_votes`, `organic_votes`, `total_votes`, `shill_ratio`.
-  - authenticated if the leaderboard is non‑public; otherwise ship anonymized identifiers only.
+  - filters: `total_votes >= 10`
+  - returns `account_id`, `shill_votes`, `organic_votes`, `total_votes`, `shill_ratio`.
+  - authentication: required if leaderboard is configured as non‑public
+  - `account_id` format:
+    - authenticated requests: full `account_hash`
+    - unauthenticated requests (if public): anonymized `salted_hash` (see Security & Privacy)
 
 ## Production Classifier
 ### Phase 1: Heuristic
@@ -51,12 +55,12 @@ Use model confidence to prioritize which posts/accounts Devvit surfaces.
 ## Security & Privacy
 - Require Devvit authentication before users can access the game.
 - Only Devvit can submit labels; require `ADMIN_TOKEN` or service token.
-- Tokens: short‑lived service token for Devvit; rotate on a schedule; revoke on incident.
+- Tokens: short‑lived service token for Devvit; rotate every 90 days; revoke immediately on incident.
 - HTTPS‑only for all Worker requests.
-- Notes: prefer predefined tags; if free‑text is allowed, warn “no PII” and strip obvious PII.
+- Notes: prefer predefined tags; if free‑text is allowed, warn “no PII” and strip using regex patterns for emails, phone numbers, SSNs.
 - Reviewer id: standardize to `devvit:<username>`.
-- Anonymize exports via salted hash (e.g., `SHA256(account_id + secret_salt)`); do not publish raw usernames in datasets.
-- Data retention: document label retention window and deletion policy.
+- Anonymize exports via salted hash (e.g., `SHA256(account_id + secret_salt)`); store salt in Cloudflare Workers secrets; rotate salt annually; do not publish raw usernames in datasets.
+- Data retention: retain labels for 24 months; implement automated deletion policy; document in privacy policy.
 - Rate‑limit label submissions (e.g., 100 labels/hour per reviewer).
 
 ## Operational Checklist
