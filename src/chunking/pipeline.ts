@@ -412,6 +412,12 @@ export class ChunkingPipeline {
       console.log(`[Chunking] Built ${allChunksList.length} chunks`);
 
       // Process embeddings and upsert chunks
+      const maxEmbeddings = Number.isFinite(this.config.maxEmbeddingsPerRun)
+        ? Math.max(0, this.config.maxEmbeddingsPerRun as number)
+        : Infinity;
+      let remainingEmbeddings = maxEmbeddings;
+      let embeddingBudgetLogged = false;
+
       for (const chunk of allChunksList) {
         try {
           // Check if embedding already cached
@@ -426,29 +432,37 @@ export class ChunkingPipeline {
             chunk.embedding_id = cachedEmbedding.id;
             result.embeddings_cached++;
           } else if (chunk.aggregated_text) {
-            // Compute new embedding
-            const embResult = await this.embeddingProvider.embed(chunk.aggregated_text);
-            const embeddingId = await generateEmbeddingCacheId(
-              chunk.text_hash,
-              embResult.model,
-              embResult.version,
-              embResult.provider
-            );
+            if (remainingEmbeddings <= 0) {
+              if (!embeddingBudgetLogged) {
+                console.log('[Chunking] Embedding budget reached, skipping remaining embeddings');
+                embeddingBudgetLogged = true;
+              }
+            } else {
+              remainingEmbeddings -= 1;
+              // Compute new embedding
+              const embResult = await this.embeddingProvider.embed(chunk.aggregated_text);
+              const embeddingId = await generateEmbeddingCacheId(
+                chunk.text_hash,
+                embResult.model,
+                embResult.version,
+                embResult.provider
+              );
 
-            const embeddingEntry: EmbeddingCacheEntry = {
-              id: embeddingId,
-              text_hash: chunk.text_hash,
-              embed_model: embResult.model,
-              embed_version: embResult.version,
-              provider_name: embResult.provider,
-              embedding_vector: embResult.vector,
-              dimensions: embResult.dimensions,
-              created_at: Date.now(),
-            };
+              const embeddingEntry: EmbeddingCacheEntry = {
+                id: embeddingId,
+                text_hash: chunk.text_hash,
+                embed_model: embResult.model,
+                embed_version: embResult.version,
+                provider_name: embResult.provider,
+                embedding_vector: embResult.vector,
+                dimensions: embResult.dimensions,
+                created_at: Date.now(),
+              };
 
-            await this.db.insertEmbedding(embeddingEntry);
-            chunk.embedding_id = embeddingId;
-            result.embeddings_computed++;
+              await this.db.insertEmbedding(embeddingEntry);
+              chunk.embedding_id = embeddingId;
+              result.embeddings_computed++;
+            }
           }
 
           // Check if chunk exists
@@ -460,6 +474,14 @@ export class ChunkingPipeline {
           }
 
         } catch (err) {
+          const message = String(err);
+          if (message.includes('Too many API requests')) {
+            remainingEmbeddings = 0;
+            if (!embeddingBudgetLogged) {
+              console.log('[Chunking] Embedding budget reached, skipping remaining embeddings');
+              embeddingBudgetLogged = true;
+            }
+          }
           result.errors.push(`Chunk ${chunk.chunk_id}: ${err}`);
         }
       }

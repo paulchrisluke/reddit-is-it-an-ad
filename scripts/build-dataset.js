@@ -3,8 +3,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HASH_SALT = process.env.DATASET_HASH_SALT || '';
 const DEFAULT_BASE_URL = process.env.REDDIT_TRACKER_BASE_URL || 'http://localhost:8787';
 const USERNAME_RE = /[A-Za-z0-9_-]{3,20}/g;
 
@@ -22,6 +24,7 @@ function printUsage() {
 		'  --stdin              Read usernames from stdin',
 		'  --users <list>        Comma-separated usernames',
 		'  --labels <path>       JSON labels file (map or array)',
+		'  --anonymize          Replace usernames with stable hashes in output',
 		'  --output <path>       Output JSONL path (default: datasets/shill-dataset.jsonl)',
 		'  --seed               Seed data for each username via /api/collect-user',
 		'  --seed-limit <n>      Max submissions per user when seeding (default: 100)',
@@ -40,6 +43,7 @@ function parseArgs(argv) {
 		stdin: false,
 		users: [],
 		labels: null,
+		anonymize: false,
 		output: 'datasets/shill-dataset.jsonl',
 		seed: false,
 		seedLimit: 100,
@@ -70,6 +74,10 @@ function parseArgs(argv) {
 		}
 		if (arg === '--labels') {
 			args.labels = argv[++i];
+			continue;
+		}
+		if (arg === '--anonymize') {
+			args.anonymize = true;
 			continue;
 		}
 		if (arg === '--output' || arg === '-o') {
@@ -108,6 +116,13 @@ function parseArgs(argv) {
 	}
 
 	return args;
+}
+
+function hashUsername(username) {
+	if (!HASH_SALT) {
+		throw new Error('DATASET_HASH_SALT must be set when --anonymize is enabled.');
+	}
+	return crypto.createHash('sha256').update(HASH_SALT + String(username).toLowerCase()).digest('hex');
 }
 
 function extractUsernamesFromText(text) {
@@ -236,7 +251,7 @@ async function seedUser(username, baseUrl, limit, pages, seedProfile, seedCommen
 }
 
 async function fetchUserSignals(username, baseUrl) {
-	const url = `${baseUrl}/api/user?username=${encodeURIComponent(username)}&include=signals,profile`;
+	const url = `${baseUrl}/api/user?username=${encodeURIComponent(username)}&include=signals,profile,profile_snapshots,url_reuse`;
 	return fetchJson(url);
 }
 
@@ -262,7 +277,7 @@ function computeSharedUrlMap(results) {
 	return sharedSet;
 }
 
-function buildFeatureRow(username, data, sharedUrls, labelsMap) {
+function buildFeatureRow(username, data, sharedUrls, labelsMap, anonymize) {
 	const subredditSummary = summarizeCounts(data.subreddits || {});
 	const domainSummary = summarizeCounts(data.domains || {});
 	const postTypeSummary = summarizeCounts(data.post_types || {});
@@ -277,12 +292,29 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 	const commentRatio = totalItems > 0 ? (data.comment_count || 0) / totalItems : 0;
 	const accountAgeDays = calculateAccountAgeDays(data.profile?.created_utc);
 	const urlsDistinct = Object.keys(data.urls || {}).length;
+	const profileSnapshots = data.profile_snapshots || null;
+	const profileSnapshotCount = Number.isFinite(profileSnapshots?.count) ? profileSnapshots.count : 0;
+	const profileSnapshotFirstTs = Number.isFinite(profileSnapshots?.first_ts) ? profileSnapshots.first_ts : null;
+	const profileSnapshotLastTs = Number.isFinite(profileSnapshots?.last_ts) ? profileSnapshots.last_ts : null;
+	const profileLinkDelta = Number.isFinite(profileSnapshots?.delta_link_karma) ? profileSnapshots.delta_link_karma : null;
+	const profileCommentDelta = Number.isFinite(profileSnapshots?.delta_comment_karma) ? profileSnapshots.delta_comment_karma : null;
+	const urlReuse = data.url_reuse || null;
+	const urlReuseDistinct = Number.isFinite(urlReuse?.distinct_urls) ? urlReuse.distinct_urls : 0;
+	const urlReuseShared = Number.isFinite(urlReuse?.shared_urls) ? urlReuse.shared_urls : 0;
+	const urlReuseRatio = Number.isFinite(urlReuse?.shared_url_ratio)
+		? urlReuse.shared_url_ratio
+		: (urlReuseDistinct > 0 ? urlReuseShared / urlReuseDistinct : 0);
 	let sharedUrlCount = 0;
 	for (const url of Object.keys(data.urls || {})) {
 		if (sharedUrls.has(url)) sharedUrlCount += 1;
 	}
 
 	const labels = labelsMap.get(username.toLowerCase());
+	const labelValue = labels?.label ?? null;
+	const labelConfidence = labels?.confidence ?? null;
+	const labelNotes = labels?.notes ?? null;
+	const userHash = anonymize ? hashUsername(username) : null;
+	const usernameValue = anonymize ? null : username;
 
 	const flags = {
 		low_comment_ratio: commentRatio < 0.2,
@@ -290,15 +322,17 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 		high_domain_concentration: domainSummary.hhi >= 0.5,
 		high_subreddit_concentration: subredditSummary.hhi >= 0.5,
 		high_url_reuse: urlsDistinct > 0 && (sharedUrlCount / urlsDistinct) >= 0.2,
+		high_url_reuse_global: urlReuseDistinct > 0 && urlReuseRatio >= 0.2,
 		high_post_focus: subredditSummary.top ? subredditSummary.top.share >= 0.6 : false,
 		low_account_age: accountAgeDays !== null ? accountAgeDays < 180 : false
 	};
 
 	const row = {
-		username,
-		label: labels?.label,
-		label_confidence: labels?.confidence,
-		label_notes: labels?.notes,
+		username: usernameValue,
+		user_hash: userHash,
+		label: labelValue,
+		label_confidence: labelConfidence,
+		label_notes: labelNotes,
 		features: {
 			post_count: data.post_count || 0,
 			comment_count: data.comment_count || 0,
@@ -332,7 +366,15 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 			url_distinct: urlsDistinct,
 			url_hhi: urlSummary.hhi,
 			shared_url_distinct: sharedUrlCount,
-			shared_url_ratio: urlsDistinct > 0 ? sharedUrlCount / urlsDistinct : 0
+			shared_url_ratio: urlsDistinct > 0 ? sharedUrlCount / urlsDistinct : 0,
+			profile_snapshot_count: profileSnapshotCount,
+			profile_snapshot_first_ts: profileSnapshotFirstTs,
+			profile_snapshot_last_ts: profileSnapshotLastTs,
+			profile_link_karma_delta: profileLinkDelta,
+			profile_comment_karma_delta: profileCommentDelta,
+			url_reuse_distinct: urlReuseDistinct,
+			url_reuse_shared: urlReuseShared,
+			url_reuse_ratio: urlReuseRatio
 		},
 		flags
 	};
@@ -371,6 +413,11 @@ async function main() {
 
 	const baseUrl = String(args.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
 	const labelsMap = loadLabels(args.labels);
+	if (args.anonymize && !HASH_SALT) {
+		console.error('Error: --anonymize requires DATASET_HASH_SALT to be set.');
+		process.exitCode = 1;
+		return;
+	}
 
 	if (args.seed) {
 		const seedLimit = Number.isFinite(args.seedLimit) && args.seedLimit > 0 ? args.seedLimit : 100;
@@ -409,7 +456,7 @@ async function main() {
 		urls: entry.data.urls || {}
 	})));
 
-	const rows = validResults.map((entry) => buildFeatureRow(entry.username, entry.data, sharedUrls, labelsMap));
+	const rows = validResults.map((entry) => buildFeatureRow(entry.username, entry.data, sharedUrls, labelsMap, args.anonymize));
 
 	if (args.output === '-' || args.output === '/dev/stdout') {
 		for (const row of rows) {

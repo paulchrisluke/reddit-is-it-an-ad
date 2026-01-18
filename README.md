@@ -93,7 +93,9 @@ npx wrangler deploy
 Edit `wrangler.jsonc` to customize:
 
 - `name` - Your worker name
-- `triggers.crons` - Data collection schedule (default: daily at 2 AM UTC)
+- `triggers.crons` - Data collection schedule
+
+Embeddings run as part of chunking. Manual runs require an admin token set as `ADMIN_TOKEN` (local: `.dev.vars`, deployed: `wrangler secret put ADMIN_TOKEN`) and passed via `Authorization: Bearer <token>` to `GET /api/trigger-chunking`.
 
 ## 📈 Data Collection
 
@@ -130,11 +132,11 @@ We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guideline
 # Run locally
 npx wrangler dev
 
-# Run tests
-npm test
-
 # Type check
 npx tsc --noEmit
+
+# Pipeline health check (crawler + game + review flow)
+npm run check:pipeline -- --base-url https://your-worker.workers.dev --dataset datasets/shill-dataset.jsonl --no-write-label
 ```
 
 ## 🧠 Data Science & Chunking
@@ -153,8 +155,8 @@ We segment activity into three distinct chunk types to capture different behavio
 
 - **Incremental Processing**: Uses a watermark system to strictly process new items since the last run.
 - **Embeddings**: Text content is embedded (vectorized) for semantic analysis.
-    - Default: Deterministic generic embedding (stub) for testing/dev.
-    - Production: Supports OpenAI `text-embedding-3-small` (configure `OPENAI_API_KEY`).
+  - Default: Deterministic generic embedding (stub) for testing/dev.
+  - Production: Uses Cloudflare Workers AI embeddings when `ai` binding is configured in `wrangler.jsonc`.
 - **Storage**: Raw items and chunks are stored in Cloudflare D1 (SQLite) for complex querying.
 
 ### Running the Pipeline / Tests
@@ -174,7 +176,7 @@ We segment activity into three distinct chunk types to capture different behavio
     Deploy the worker, then visit: `https://your-worker.workers.dev/api/test-chunking-logic`
 
 4.  **Trigger Pipeline Manually**:
-    `https://your-worker.workers.dev/api/trigger-chunking`
+    `curl -H "Authorization: Bearer <token>" https://your-worker.workers.dev/api/trigger-chunking`
 
 ## 📜 Ethics & Privacy
 

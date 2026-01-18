@@ -41,14 +41,16 @@
 	],
 	// Cloudflare Workers AI for embeddings
 	"ai": {
-		"binding": "AI"
+		"binding": "AI",
+		"remote": true
 	},
 	// Cloudflare Vectorize for embedding storage
 	// Create with: npx wrangler vectorize create reddit-embeddings --dimensions=768 --metric=cosine
 	"vectorize": [
 		{
 			"binding": "VECTORIZE",
-			"index_name": "reddit-embeddings"
+			"index_name": "reddit-embeddings",
+			"remote": true
 		}
 	]
 }
