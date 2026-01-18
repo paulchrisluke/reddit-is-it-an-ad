@@ -39,42 +39,50 @@ function parseArgs(argv) {
 		help: false
 	};
 
+	function requireValue(flag) {
+		const next = argv[i + 1];
+		if (!next || next.startsWith('--')) {
+			throw new Error(`Missing value for ${flag}`);
+		}
+		return next;
+	}
+
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--input') {
-			args.input = argv[++i];
+			args.input = requireValue(arg);
 			continue;
 		}
 		if (arg === '--model-out') {
-			args.modelOut = argv[++i];
+			args.modelOut = requireValue(arg);
 			continue;
 		}
 		if (arg === '--label-pos') {
-			args.labelPos = argv[++i];
+			args.labelPos = requireValue(arg);
 			continue;
 		}
 		if (arg === '--label-neg') {
-			args.labelNeg = argv[++i];
+			args.labelNeg = requireValue(arg);
 			continue;
 		}
 		if (arg === '--test-split') {
-			args.testSplit = Number(argv[++i]);
+			args.testSplit = Number(requireValue(arg));
 			continue;
 		}
 		if (arg === '--epochs') {
-			args.epochs = Number(argv[++i]);
+			args.epochs = Number(requireValue(arg));
 			continue;
 		}
 		if (arg === '--lr') {
-			args.lr = Number(argv[++i]);
+			args.lr = Number(requireValue(arg));
 			continue;
 		}
 		if (arg === '--lambda') {
-			args.lambda = Number(argv[++i]);
+			args.lambda = Number(requireValue(arg));
 			continue;
 		}
 		if (arg === '--seed') {
-			args.seed = Number(argv[++i]);
+			args.seed = Number(requireValue(arg));
 			continue;
 		}
 		if (arg === '--help' || arg === '-h') {
@@ -174,6 +182,18 @@ function dot(weights, vector) {
 }
 
 function evaluate(samples, weights, bias, featureKeys, means, stds) {
+	if (samples.length === 0) {
+		return {
+			total: 0,
+			loss: 0,
+			accuracy: 0,
+			precision: 0,
+			recall: 0,
+			f1: 0,
+			confusion: { tp: 0, fp: 0, tn: 0, fn: 0 }
+		};
+	}
+
 	let tp = 0;
 	let fp = 0;
 	let tn = 0;
