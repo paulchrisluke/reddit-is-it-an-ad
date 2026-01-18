@@ -1625,18 +1625,40 @@ interface UserData {
 	  if (env.DB) {
 		const cutoff = Math.floor(Date.now() / 1000) - KV_TTL;
 		const rows = await env.DB.prepare(`
-		  SELECT account_id,
-				 COUNT(*) AS post_count,
-				 MIN(created_utc) AS first_seen,
-				 MAX(created_utc) AS last_seen,
-				 SUM(score) AS total_score
-		  FROM items
-		  WHERE item_type = 'post'
-			AND created_utc >= ?
-		  GROUP BY account_id
+		  WITH user_counts AS (
+			SELECT account_id, subreddit, COUNT(*) AS cnt
+			FROM items
+			WHERE item_type = 'post'
+			  AND created_utc >= ?
+			GROUP BY account_id, subreddit
+		  ),
+		  ranked AS (
+			SELECT account_id, subreddit, cnt,
+				   ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY cnt DESC) AS rn
+			FROM user_counts
+		  ),
+		  top_sub AS (
+			SELECT account_id, subreddit AS top_subreddit
+			FROM ranked
+			WHERE rn = 1
+		  ),
+		  summary AS (
+			SELECT account_id,
+				   COUNT(*) AS post_count,
+				   MIN(created_utc) AS first_seen,
+				   MAX(created_utc) AS last_seen,
+				   SUM(score) AS total_score
+			FROM items
+			WHERE item_type = 'post'
+			  AND created_utc >= ?
+			GROUP BY account_id
+		  )
+		  SELECT summary.*, top_sub.top_subreddit
+		  FROM summary
+		  LEFT JOIN top_sub ON top_sub.account_id = summary.account_id
 		  ORDER BY post_count DESC
 		  LIMIT 1000
-		`).bind(cutoff).all();
+		`).bind(cutoff, cutoff).all();
 
 		const results = (rows.results || []) as Array<Record<string, any>>;
 		if (results.length > 0) {
@@ -1656,7 +1678,7 @@ interface UserData {
 			  total_karma: coerceNumber(row.total_score) ?? 0,
 			  first_seen: formatUtcDate(firstSeenUtc || undefined) || date,
 			  daily_average: dailyAverage,
-			  top_subreddit: 'N/A'
+			  top_subreddit: row.top_subreddit ? String(row.top_subreddit) : 'N/A'
 			};
 		  });
 

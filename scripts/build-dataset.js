@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_BASE_URL = process.env.REDDIT_TRACKER_BASE_URL || 'http://localhost:8787';
@@ -22,6 +23,7 @@ function printUsage() {
 		'  --stdin              Read usernames from stdin',
 		'  --users <list>        Comma-separated usernames',
 		'  --labels <path>       JSON labels file (map or array)',
+		'  --anonymize          Replace usernames with stable hashes in output',
 		'  --output <path>       Output JSONL path (default: datasets/shill-dataset.jsonl)',
 		'  --seed               Seed data for each username via /api/collect-user',
 		'  --seed-limit <n>      Max submissions per user when seeding (default: 100)',
@@ -40,6 +42,7 @@ function parseArgs(argv) {
 		stdin: false,
 		users: [],
 		labels: null,
+		anonymize: false,
 		output: 'datasets/shill-dataset.jsonl',
 		seed: false,
 		seedLimit: 100,
@@ -70,6 +73,10 @@ function parseArgs(argv) {
 		}
 		if (arg === '--labels') {
 			args.labels = argv[++i];
+			continue;
+		}
+		if (arg === '--anonymize') {
+			args.anonymize = true;
 			continue;
 		}
 		if (arg === '--output' || arg === '-o') {
@@ -108,6 +115,10 @@ function parseArgs(argv) {
 	}
 
 	return args;
+}
+
+function hashUsername(username) {
+	return crypto.createHash('sha256').update(String(username).toLowerCase()).digest('hex');
 }
 
 function extractUsernamesFromText(text) {
@@ -262,7 +273,7 @@ function computeSharedUrlMap(results) {
 	return sharedSet;
 }
 
-function buildFeatureRow(username, data, sharedUrls, labelsMap) {
+function buildFeatureRow(username, data, sharedUrls, labelsMap, anonymize) {
 	const subredditSummary = summarizeCounts(data.subreddits || {});
 	const domainSummary = summarizeCounts(data.domains || {});
 	const postTypeSummary = summarizeCounts(data.post_types || {});
@@ -298,6 +309,8 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 	const labelValue = labels?.label ?? null;
 	const labelConfidence = labels?.confidence ?? null;
 	const labelNotes = labels?.notes ?? null;
+	const userHash = anonymize ? hashUsername(username) : null;
+	const usernameValue = anonymize ? null : username;
 
 	const flags = {
 		low_comment_ratio: commentRatio < 0.2,
@@ -311,7 +324,8 @@ function buildFeatureRow(username, data, sharedUrls, labelsMap) {
 	};
 
 	const row = {
-		username,
+		username: usernameValue,
+		user_hash: userHash,
 		label: labelValue,
 		label_confidence: labelConfidence,
 		label_notes: labelNotes,
@@ -433,7 +447,7 @@ async function main() {
 		urls: entry.data.urls || {}
 	})));
 
-	const rows = validResults.map((entry) => buildFeatureRow(entry.username, entry.data, sharedUrls, labelsMap));
+	const rows = validResults.map((entry) => buildFeatureRow(entry.username, entry.data, sharedUrls, labelsMap, args.anonymize));
 
 	if (args.output === '-' || args.output === '/dev/stdout') {
 		for (const row of rows) {
