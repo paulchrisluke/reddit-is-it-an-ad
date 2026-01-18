@@ -15,19 +15,21 @@ Move from MVP labeling to a production‑ready Devvit experience that can surfac
 
 ## Leaderboard (Top 1,000)
 ### Definition
-Rank accounts by the number of labels marking them as `likely_shill`, with optional weighting by confidence and reviewer reputation.
+Rank accounts by likely‑shill signals with a minimum vote threshold. Avoid net‑score inversions by using a shill‑ratio with a minimum vote count (e.g., rank by `shill_ratio` then `shill_votes`, require `total_votes >= 10`).
 
 ### Data Model (Worker/D1)
 - `review_labels`: already stores label, reviewer, confidence.
 - Add materialized view or aggregate query:
   - `shill_votes = SUM(label == likely_shill)`
   - `organic_votes = SUM(label == likely_organic)`
-  - `net_score = shill_votes - organic_votes`
-  - `rank by net_score DESC, shill_votes DESC`
+  - `total_votes = shill_votes + organic_votes`
+  - `shill_ratio = shill_votes / total_votes`
+  - `rank by shill_ratio DESC, shill_votes DESC`
 
 ### API Endpoint (Worker)
-- `GET /api/leaderboard?limit=1000`
-  - returns `account_id`, `shill_votes`, `organic_votes`, `net_score`.
+- `GET /api/leaderboard?limit=1000&cursor=...`
+  - returns `account_hash`, `shill_votes`, `organic_votes`, `total_votes`, `shill_ratio`.
+  - authenticated if the leaderboard is non‑public; otherwise ship anonymized identifiers only.
 
 ## Production Classifier
 ### Phase 1: Heuristic
@@ -49,8 +51,13 @@ Use model confidence to prioritize which posts/accounts Devvit surfaces.
 ## Security & Privacy
 - Require Devvit authentication before users can access the game.
 - Only Devvit can submit labels; require `ADMIN_TOKEN` or service token.
-- Anonymize exports via salt; do not publish raw usernames in datasets.
-- Rate‑limit label submissions.
+- Tokens: short‑lived service token for Devvit; rotate on a schedule; revoke on incident.
+- HTTPS‑only for all Worker requests.
+- Notes: prefer predefined tags; if free‑text is allowed, warn “no PII” and strip obvious PII.
+- Reviewer id: standardize to `devvit:<username>`.
+- Anonymize exports via salted hash (e.g., `SHA256(account_id + secret_salt)`); do not publish raw usernames in datasets.
+- Data retention: document label retention window and deletion policy.
+- Rate‑limit label submissions (e.g., 100 labels/hour per reviewer).
 
 ## Operational Checklist
 - [ ] Devvit app connected to Worker with secret token.

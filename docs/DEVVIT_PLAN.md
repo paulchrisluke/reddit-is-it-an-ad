@@ -35,6 +35,7 @@ Ship a Devvit app that lets users label posts as "ad/shill" vs "organic" and fee
 - [ ] Label submission wired to `/api/review/submit`.
 - [ ] Basic error handling + retry UI.
 - [ ] Minimal analytics logging (counts + last label).
+- [ ] Require Devvit authentication before play.
 
 ## Implementation Steps
 ### 1) Devvit Project Setup
@@ -56,7 +57,9 @@ Ship a Devvit app that lets users label posts as "ad/shill" vs "organic" and fee
 - Optional: include signal summary if we want to show “why this was selected.”
 
 ### 4) Data Hygiene
+- Notes: prefer predefined tags; if free‑text is allowed, warn “no PII”.
 - Store labels with notes like “devvit”.
+- HTTPS‑only for all Worker requests.
 - Keep usernames in worker DB; anonymize when exporting datasets.
 
 ### 5) Local/Stage Testing
